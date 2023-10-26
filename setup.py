@@ -52,6 +52,7 @@ setup(
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
         'Programming Language :: Python :: Implementation :: CPython',
         'Programming Language :: Python :: Implementation :: PyPy',
         'Topic :: Software Development :: Libraries :: Python Modules',
@@ -66,6 +67,9 @@ setup(
         # higher.
         # Python 3.9 and later include zoneinfo which replaces pytz
         'pytz>=2015.7; python_version<"3.9"',
+        # https://github.com/python/cpython/issues/95299
+        # https://github.com/python-babel/babel/issues/1031
+        'setuptools; python_version>="3.12"',
     ],
     extras_require={
         'dev': [
