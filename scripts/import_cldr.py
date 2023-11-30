@@ -23,7 +23,7 @@ from xml.etree import ElementTree
 # Make sure we're using Babel source, and not some previously installed version
 CHECKOUT_ROOT = os.path.abspath(os.path.join(
     os.path.dirname(__file__),
-    '..'
+    '..',
 ))
 BABEL_PACKAGE_ROOT = os.path.join(CHECKOUT_ROOT, "babel")
 sys.path.insert(0, CHECKOUT_ROOT)
@@ -55,7 +55,7 @@ NAME_MAP = {
     'eraAbbr': 'abbreviated',
     'eraNames': 'wide',
     'eraNarrow': 'narrow',
-    'timeFormats': 'time_formats'
+    'timeFormats': 'time_formats',
 }
 
 log = logging.getLogger("import_cldr")
@@ -164,11 +164,11 @@ def main():
     parser = OptionParser(usage='%prog path/to/cldr')
     parser.add_option(
         '-f', '--force', dest='force', action='store_true', default=False,
-        help='force import even if destination file seems up to date'
+        help='force import even if destination file seems up to date',
     )
     parser.add_option(
         '-j', '--json', dest='dump_json', action='store_true', default=False,
-        help='also export debugging JSON dumps of locale data'
+        help='also export debugging JSON dumps of locale data',
     )
     parser.add_option(
         '-q', '--quiet', dest='quiet', action='store_true', default=bool(os.environ.get('BABEL_CLDR_QUIET')),
@@ -187,7 +187,7 @@ def main():
         srcdir=args[0],
         destdir=BABEL_PACKAGE_ROOT,
         force=bool(options.force),
-        dump_json=bool(options.dump_json)
+        dump_json=bool(options.dump_json),
     )
 
 
@@ -399,7 +399,7 @@ def _process_local_datas(sup, srcdir, destdir, force=False, dump_json=False):
 
         locale_id = '_'.join(filter(None, [
             language,
-            territory != '001' and territory or None
+            territory != '001' and territory or None,
         ]))
 
         data['locale_id'] = locale_id
@@ -432,6 +432,7 @@ def _process_local_datas(sup, srcdir, destdir, force=False, dump_json=False):
             parse_interval_formats(data, calendar)
 
         parse_number_symbols(data, tree)
+        parse_numbering_systems(data, tree)
         parse_decimal_formats(data, tree)
         parse_scientific_formats(data, tree)
         parse_percent_formats(data, tree)
@@ -448,7 +449,7 @@ def _process_local_datas(sup, srcdir, destdir, force=False, dump_json=False):
         if unsupported_number_systems_string:
             log.warning(
                 f"{locale_id}: unsupported number systems were ignored: "
-                f"{unsupported_number_systems_string}"
+                f"{unsupported_number_systems_string}",
             )
 
         write_datafile(data_filename, data, dump_json=dump_json)
@@ -616,7 +617,7 @@ def parse_calendar_months(data, calendar):
                 elif elem.tag == 'alias':
                     ctxts[width_type] = Alias(
                         _translate_alias(['months', ctxt_type, width_type],
-                                         elem.attrib['path'])
+                                         elem.attrib['path']),
                     )
 
 
@@ -634,7 +635,7 @@ def parse_calendar_days(data, calendar):
                 elif elem.tag == 'alias':
                     ctxts[width_type] = Alias(
                         _translate_alias(['days', ctxt_type, width_type],
-                                         elem.attrib['path'])
+                                         elem.attrib['path']),
                     )
 
 
@@ -667,7 +668,7 @@ def parse_calendar_eras(data, calendar):
             elif elem.tag == 'alias':
                 eras[width_type] = Alias(
                     _translate_alias(['eras', width_type],
-                                     elem.attrib['path'])
+                                     elem.attrib['path']),
                 )
 
 
@@ -695,13 +696,13 @@ def parse_calendar_date_formats(data, calendar):
                     continue
                 try:
                     date_formats[type] = dates.parse_pattern(
-                        str(elem.findtext('dateFormat/pattern'))
+                        str(elem.findtext('dateFormat/pattern')),
                     )
                 except ValueError as e:
                     log.error(e)
             elif elem.tag == 'alias':
                 date_formats = Alias(_translate_alias(
-                    ['date_formats'], elem.attrib['path'])
+                    ['date_formats'], elem.attrib['path']),
                 )
 
 
@@ -715,13 +716,13 @@ def parse_calendar_time_formats(data, calendar):
                     continue
                 try:
                     time_formats[type] = dates.parse_pattern(
-                        str(elem.findtext('timeFormat/pattern'))
+                        str(elem.findtext('timeFormat/pattern')),
                     )
                 except ValueError as e:
                     log.error(e)
             elif elem.tag == 'alias':
                 time_formats = Alias(_translate_alias(
-                    ['time_formats'], elem.attrib['path'])
+                    ['time_formats'], elem.attrib['path']),
                 )
 
 
@@ -740,7 +741,7 @@ def parse_calendar_datetime_skeletons(data, calendar):
                     log.error(e)
             elif elem.tag == 'alias':
                 datetime_formats = Alias(_translate_alias(
-                    ['datetime_formats'], elem.attrib['path'])
+                    ['datetime_formats'], elem.attrib['path']),
                 )
             elif elem.tag == 'availableFormats':
                 for datetime_skeleton in elem.findall('dateFormatItem'):
@@ -751,14 +752,27 @@ def parse_calendar_datetime_skeletons(data, calendar):
 
 def parse_number_symbols(data, tree):
     number_symbols = data.setdefault('number_symbols', {})
-    for symbol_elem in tree.findall('.//numbers/symbols'):
-        if _should_skip_number_elem(data, symbol_elem):  # TODO: Support other number systems
+    for symbol_system_elem in tree.findall('.//numbers/symbols'):
+        number_system = symbol_system_elem.get('numberSystem')
+        if not number_system:
             continue
 
-        for elem in symbol_elem.findall('./*'):
-            if _should_skip_elem(elem):
+        for symbol_element in symbol_system_elem.findall('./*'):
+            if _should_skip_elem(symbol_element):
                 continue
-            number_symbols[elem.tag] = str(elem.text)
+
+            number_symbols.setdefault(number_system, {})[symbol_element.tag] = str(symbol_element.text)
+
+
+def parse_numbering_systems(data, tree):
+    default_number_system_node = tree.find('.//numbers/defaultNumberingSystem')
+    if default_number_system_node is not None:
+        data['default_numbering_system'] = default_number_system_node.text
+
+    numbering_systems = data.setdefault('numbering_systems', {})
+    other_numbering_systems_node = tree.find('.//numbers/otherNumberingSystems') or []
+    for system in other_numbering_systems_node:
+        numbering_systems[system.tag] = system.text
 
 
 def parse_decimal_formats(data, tree):
@@ -933,7 +947,7 @@ def parse_currency_formats(data, tree):
                     if child.tag == 'alias':
                         currency_formats[type] = Alias(
                             _translate_alias(['currency_formats', elem.attrib['type']],
-                                             child.attrib['path'])
+                                             child.attrib['path']),
                         )
                     elif child.tag == 'pattern':
                         pattern_type = child.attrib.get('type')

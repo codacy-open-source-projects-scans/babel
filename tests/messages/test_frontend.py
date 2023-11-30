@@ -18,10 +18,10 @@ import time
 import unittest
 from datetime import datetime, timedelta
 from io import BytesIO, StringIO
+from typing import List
 
 import pytest
 from freezegun import freeze_time
-from setuptools import Distribution
 
 from babel import __version__ as VERSION
 from babel.dates import format_datetime
@@ -29,28 +29,39 @@ from babel.messages import Catalog, extract, frontend
 from babel.messages.frontend import (
     BaseError,
     CommandLineInterface,
+    ExtractMessages,
     OptionError,
-    extract_messages,
-    update_catalog,
+    UpdateCatalog,
 )
 from babel.messages.pofile import read_po, write_po
 from babel.util import LOCALTZ
-
-TEST_PROJECT_DISTRIBUTION_DATA = {
-    "name": "TestProject",
-    "version": "0.1",
-    "packages": ["project"],
-}
-
-this_dir = os.path.abspath(os.path.dirname(__file__))
-data_dir = os.path.join(this_dir, 'data')
-project_dir = os.path.join(data_dir, 'project')
-i18n_dir = os.path.join(project_dir, 'i18n')
-pot_file = os.path.join(i18n_dir, 'temp.pot')
+from tests.messages.consts import (
+    TEST_PROJECT_DISTRIBUTION_DATA,
+    data_dir,
+    i18n_dir,
+    pot_file,
+    project_dir,
+    this_dir,
+)
 
 
 def _po_file(locale):
     return os.path.join(i18n_dir, locale, 'LC_MESSAGES', 'messages.po')
+
+
+class Distribution:  # subset of distutils.dist.Distribution
+    def __init__(self, attrs: dict) -> None:
+        self.attrs = attrs
+
+    def get_name(self) -> str:
+        return self.attrs['name']
+
+    def get_version(self) -> str:
+        return self.attrs['version']
+
+    @property
+    def packages(self) -> List[str]:
+        return self.attrs['packages']
 
 
 class CompileCatalogTestCase(unittest.TestCase):
@@ -60,7 +71,7 @@ class CompileCatalogTestCase(unittest.TestCase):
         os.chdir(data_dir)
 
         self.dist = Distribution(TEST_PROJECT_DISTRIBUTION_DATA)
-        self.cmd = frontend.compile_catalog(self.dist)
+        self.cmd = frontend.CompileCatalog(self.dist)
         self.cmd.initialize_options()
 
     def tearDown(self):
@@ -86,7 +97,7 @@ class ExtractMessagesTestCase(unittest.TestCase):
         os.chdir(data_dir)
 
         self.dist = Distribution(TEST_PROJECT_DISTRIBUTION_DATA)
-        self.cmd = frontend.extract_messages(self.dist)
+        self.cmd = frontend.ExtractMessages(self.dist)
         self.cmd.initialize_options()
 
     def tearDown(self):
@@ -266,7 +277,7 @@ msgstr[1] ""
             'project': [
                 ('**/ignored/**.*', 'ignore', None),
                 ('**.py', 'python', None),
-            ]
+            ],
         }
         self.cmd.copyright_holder = 'FooBar, Inc.'
         self.cmd.msgid_bugs_address = 'bugs.address@email.tld'
@@ -321,7 +332,7 @@ msgstr[1] ""
             'project': [
                 ('**/ignored/**.*', 'ignore', None),
                 ('**.py', 'python', None),
-            ]
+            ],
         }
         self.cmd.output_file = 'project/i18n/temp.pot'
         self.cmd.add_location = 'file'
@@ -355,7 +366,7 @@ class InitCatalogTestCase(unittest.TestCase):
         os.chdir(data_dir)
 
         self.dist = Distribution(TEST_PROJECT_DISTRIBUTION_DATA)
-        self.cmd = frontend.init_catalog(self.dist)
+        self.cmd = frontend.InitCatalog(self.dist)
         self.cmd.initialize_options()
 
     def tearDown(self):
@@ -1157,7 +1168,7 @@ msgstr[2] ""
         self.cli.run(sys.argv + ['init',
                                  '-l', 'fi',
                                  '-o', po_file,
-                                 '-i', tmpl_file
+                                 '-i', tmpl_file,
                                  ])
         with open(po_file) as infp:
             catalog = read_po(infp)
@@ -1191,7 +1202,7 @@ msgstr[2] ""
         self.cli.run(sys.argv + ['init',
                                  '-l', 'fi',
                                  '-o', po_file,
-                                 '-i', tmpl_file
+                                 '-i', tmpl_file,
                                  ])
         with open(po_file) as infp:
             catalog = read_po(infp)
@@ -1245,7 +1256,7 @@ msgstr[2] ""
         self.cli.run(sys.argv + ['init',
                                  '-l', 'fi_FI',
                                  '-o', po_file,
-                                 '-i', tmpl_file
+                                 '-i', tmpl_file,
                                  ])
 
         # Update the catalog file
@@ -1303,7 +1314,7 @@ msgstr[2] ""
         self.cli.run(sys.argv + ['init',
                                  '-l', 'fi_FI',
                                  '-o', po_file,
-                                 '-i', tmpl_file
+                                 '-i', tmpl_file,
                                  ])
 
         # Update the catalog file
@@ -1430,8 +1441,9 @@ def test_parse_keywords_with_t():
             None: (1,),
             2: (2,),
             3: ((2, 'c'), 3),
-        }
+        },
     }
+
 
 def test_extract_messages_with_t():
     content = rb"""
@@ -1464,27 +1476,6 @@ def configure_cli_command(cmdline):
     return cmdinst
 
 
-def configure_distutils_command(cmdline):
-    """
-    Helper to configure a command class, but not run it just yet.
-
-    This will have strange side effects if you pass in things
-    `distutils` deals with internally.
-
-    :param cmdline: The command line (sans the executable name)
-    :return: Command instance
-    """
-    d = Distribution(attrs={
-        "cmdclass": vars(frontend),
-        "script_args": shlex.split(cmdline),
-    })
-    d.parse_command_line()
-    assert len(d.commands) == 1
-    cmdinst = d.get_command_obj(d.commands[0])
-    cmdinst.ensure_finalized()
-    return cmdinst
-
-
 @pytest.mark.parametrize("split", (False, True))
 @pytest.mark.parametrize("arg_name", ("-k", "--keyword", "--keywords"))
 def test_extract_keyword_args_384(split, arg_name):
@@ -1513,9 +1504,9 @@ def test_extract_keyword_args_384(split, arg_name):
     # (Both of those invocation styles should be equivalent, so there is no parametrization from here on out)
 
     cmdinst = configure_cli_command(
-        f"extract -F babel-django.cfg --add-comments Translators: -o django232.pot {kwarg_text} ."
+        f"extract -F babel-django.cfg --add-comments Translators: -o django232.pot {kwarg_text} .",
     )
-    assert isinstance(cmdinst, extract_messages)
+    assert isinstance(cmdinst, ExtractMessages)
     assert set(cmdinst.keywords.keys()) == {'_', 'dgettext', 'dngettext',
                                             'gettext', 'gettext_lazy',
                                             'gettext_noop', 'N_', 'ngettext',
@@ -1526,31 +1517,10 @@ def test_extract_keyword_args_384(split, arg_name):
                                             'ungettext', 'ungettext_lazy'}
 
 
-@pytest.mark.parametrize("kwarg,expected", [
-    ("LW_", ("LW_",)),
-    ("LW_ QQ Q", ("LW_", "QQ", "Q")),
-    ("yiy         aia", ("yiy", "aia")),
-])
-def test_extract_distutils_keyword_arg_388(kwarg, expected):
-    # This is a regression test for https://github.com/python-babel/babel/issues/388
-
-    # Note that distutils-based commands only support a single repetition of the same argument;
-    # hence `--keyword ignored` will actually never end up in the output.
-
-    cmdinst = configure_distutils_command(
-        "extract_messages --no-default-keywords --keyword ignored --keyword '%s' "
-        "--input-dirs . --output-file django233.pot --add-comments Bar,Foo" % kwarg
-    )
-    assert isinstance(cmdinst, extract_messages)
-    assert set(cmdinst.keywords.keys()) == set(expected)
-
-    # Test the comma-separated comment argument while we're at it:
-    assert set(cmdinst.add_comments) == {"Bar", "Foo"}
-
-
 def test_update_catalog_boolean_args():
-    cmdinst = configure_cli_command("update --init-missing --no-wrap -N --ignore-obsolete --previous -i foo -o foo -l en")
-    assert isinstance(cmdinst, update_catalog)
+    cmdinst = configure_cli_command(
+        "update --init-missing --no-wrap -N --ignore-obsolete --previous -i foo -o foo -l en")
+    assert isinstance(cmdinst, UpdateCatalog)
     assert cmdinst.init_missing is True
     assert cmdinst.no_wrap is True
     assert cmdinst.no_fuzzy_matching is True
@@ -1561,25 +1531,31 @@ def test_update_catalog_boolean_args():
 def test_extract_cli_knows_dash_s():
     # This is a regression test for https://github.com/python-babel/babel/issues/390
     cmdinst = configure_cli_command("extract -s -o foo babel")
-    assert isinstance(cmdinst, extract_messages)
+    assert isinstance(cmdinst, ExtractMessages)
     assert cmdinst.strip_comments
+
+
+def test_extract_cli_knows_dash_dash_last_dash_translator():
+    cmdinst = configure_cli_command('extract --last-translator "FULL NAME EMAIL@ADDRESS" -o foo babel')
+    assert isinstance(cmdinst, ExtractMessages)
+    assert cmdinst.last_translator == "FULL NAME EMAIL@ADDRESS"
 
 
 def test_extract_add_location():
     cmdinst = configure_cli_command("extract -o foo babel --add-location full")
-    assert isinstance(cmdinst, extract_messages)
+    assert isinstance(cmdinst, ExtractMessages)
     assert cmdinst.add_location == 'full'
     assert not cmdinst.no_location
     assert cmdinst.include_lineno
 
     cmdinst = configure_cli_command("extract -o foo babel --add-location file")
-    assert isinstance(cmdinst, extract_messages)
+    assert isinstance(cmdinst, ExtractMessages)
     assert cmdinst.add_location == 'file'
     assert not cmdinst.no_location
     assert not cmdinst.include_lineno
 
     cmdinst = configure_cli_command("extract -o foo babel --add-location never")
-    assert isinstance(cmdinst, extract_messages)
+    assert isinstance(cmdinst, ExtractMessages)
     assert cmdinst.add_location == 'never'
     assert cmdinst.no_location
 
@@ -1603,7 +1579,7 @@ def test_extract_ignore_dirs(monkeypatch, capsys, tmp_path, with_underscore_igno
         # This also tests that multiple arguments are supported.
         cmd += "--ignore-dirs '_*'"
     cmdinst = configure_cli_command(cmd)
-    assert isinstance(cmdinst, extract_messages)
+    assert isinstance(cmdinst, ExtractMessages)
     assert cmdinst.directory_filter
     cmdinst.run()
     pot_content = pot_file.read_text()
