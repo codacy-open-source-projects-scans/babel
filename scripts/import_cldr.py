@@ -315,6 +315,11 @@ def parse_global(srcdir, sup):
 
         for paternity in parentBlock.findall('./parentLocale'):
             parent = paternity.attrib['parent']
+            if parent == 'root':
+                # Since CLDR-45, the 'root' parent locale uses 'localeRules="nonlikelyScript"' instead of
+                # 'locales'. This special case is handled in babel when loading locale data
+                # (https://cldr.unicode.org/index/downloads/cldr-45#h.5rbkhkncdqi9)
+                continue
             for child in paternity.attrib['locales'].split():
                 parent_exceptions[child] = parent
 
@@ -525,10 +530,11 @@ def parse_locale_display_names(data, tree):
 
 def parse_list_patterns(data, tree):
     list_patterns = data.setdefault('list_patterns', {})
-    for listType in tree.findall('.//listPatterns/listPattern'):
-        by_type = list_patterns.setdefault(listType.attrib.get('type', 'standard'), {})
-        for listPattern in listType.findall('listPatternPart'):
-            by_type[listPattern.attrib['type']] = _text(listPattern)
+    for list_pattern_el in tree.findall('.//listPatterns/listPattern'):
+        pattern_type = list_pattern_el.attrib.get('type', 'standard')
+        for pattern_part_el in list_pattern_el.findall('listPatternPart'):
+            pattern_part_type = pattern_part_el.attrib['type']
+            list_patterns.setdefault(pattern_type, {})[pattern_part_type] = _text(pattern_part_el)
 
 
 def parse_dates(data, tree, sup, regions, territory):
