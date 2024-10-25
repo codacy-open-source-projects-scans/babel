@@ -17,7 +17,7 @@ import freezegun
 import pytest
 
 from babel import Locale, dates
-from babel.dates import NO_INHERITANCE_MARKER, UTC, _localize
+from babel.dates import NO_INHERITANCE_MARKER, UTC, _localize, parse_pattern
 from babel.util import FixedOffsetTimezone
 
 
@@ -619,6 +619,19 @@ def test_format_skeleton(timezone_getter):
     assert (dates.format_skeleton('EHm', dt, tzinfo=timezone_getter('Asia/Bangkok'), locale='th') == 'อา. 22:30 น.')
 
 
+@pytest.mark.parametrize(('skeleton', 'expected'), [
+    ('Hmz', 'Hmv'),
+    ('kmv', 'Hmv'),
+    ('Kmv', 'hmv'),
+    ('Hma', 'Hm'),
+    ('Hmb', 'Hm'),
+    ('zkKab', 'vHh'),
+])
+def test_match_skeleton_alternate_characters(skeleton, expected):
+    # https://github.com/unicode-org/icu/blob/5e22f0076ec9b55056cd8a84e9ef370632f44174/icu4j/main/core/src/main/java/com/ibm/icu/text/DateIntervalInfo.java#L1090-L1102
+    assert dates.match_skeleton(skeleton, (expected,)) == expected
+
+
 def test_format_timedelta():
     assert (dates.format_timedelta(timedelta(weeks=12), locale='en_US')
             == '3 months')
@@ -664,6 +677,32 @@ def test_parse_date():
 ])
 def test_parse_time(input, expected):
     assert dates.parse_time(input, locale='en_US') == expected
+
+
+def test_parse_time_no_seconds_in_format():
+    # parse time using a time format which does not include seconds
+    locale = 'cs_CZ'
+    fmt = 'short'
+    assert dates.get_time_format(format=fmt, locale=locale).pattern == 'H:mm'
+    assert dates.parse_time('9:30', locale=locale, format=fmt) == time(9, 30)
+
+
+def test_parse_time_alternate_characters(monkeypatch):
+    # 'K' can be used as an alternative to 'H'
+    def get_time_format(*args, **kwargs):
+        return parse_pattern('KK:mm:ss')
+    monkeypatch.setattr(dates, 'get_time_format', get_time_format)
+
+    assert dates.parse_time('9:30') == time(9, 30)
+
+
+def test_parse_date_alternate_characters(monkeypatch):
+    # 'l' can be used as an alternative to 'm'
+    def get_date_format(*args, **kwargs):
+        return parse_pattern('yyyy-ll-dd')
+    monkeypatch.setattr(dates, 'get_time_format', get_date_format)
+
+    assert dates.parse_date('2024-10-20') == date(2024, 10, 20)
 
 
 @pytest.mark.parametrize('case', ['', 'a', 'aaa'])

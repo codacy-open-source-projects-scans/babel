@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import warnings
 from functools import lru_cache
@@ -1232,7 +1233,7 @@ def parse_date(
 
     format_str = get_date_format(format=format, locale=locale).pattern.lower()
     year_idx = format_str.index('y')
-    month_idx = format_str.index('m')
+    month_idx = format_str.find('m')
     if month_idx < 0:
         month_idx = format_str.index('l')
     day_idx = format_str.index('d')
@@ -1277,11 +1278,13 @@ def parse_time(
 
     # TODO: try ISO format first?
     format_str = get_time_format(format=format, locale=locale).pattern.lower()
-    hour_idx = format_str.index('h')
+    hour_idx = format_str.find('h')
     if hour_idx < 0:
         hour_idx = format_str.index('k')
     min_idx = format_str.index('m')
-    sec_idx = format_str.index('s')
+    # format might not contain seconds
+    if (sec_idx := format_str.find('s')) < 0:
+        sec_idx = math.inf
 
     indexes = sorted([(hour_idx, 'H'), (min_idx, 'M'), (sec_idx, 'S')])
     indexes = {item[1]: idx for idx, item in enumerate(indexes)}
@@ -1890,6 +1893,14 @@ def match_skeleton(skeleton: str, options: Iterable[str], allow_different_fields
 
     if 'z' in skeleton and not any('z' in option for option in options):
         skeleton = skeleton.replace('z', 'v')
+    if 'k' in skeleton and not any('k' in option for option in options):
+        skeleton = skeleton.replace('k', 'H')
+    if 'K' in skeleton and not any('K' in option for option in options):
+        skeleton = skeleton.replace('K', 'h')
+    if 'a' in skeleton and not any('a' in option for option in options):
+        skeleton = skeleton.replace('a', '')
+    if 'b' in skeleton and not any('b' in option for option in options):
+        skeleton = skeleton.replace('b', '')
 
     get_input_field_width = dict(t[1] for t in tokenize_pattern(skeleton) if t[0] == "field").get
     best_skeleton = None
