@@ -1,14 +1,14 @@
 #
-# Copyright (C) 2007-2011 Edgewall Software, 2013-2024 the Babel team
+# Copyright (C) 2007-2011 Edgewall Software, 2013-2025 the Babel team
 # All rights reserved.
 #
 # This software is licensed as described in the file LICENSE, which
 # you should have received as part of this distribution. The terms
-# are also available at http://babel.edgewall.org/wiki/License.
+# are also available at https://github.com/python-babel/babel/blob/master/LICENSE.
 #
 # This software consists of voluntary contributions made by many
 # individuals. For the exact contribution history, see the revision
-# history and logs, available at http://babel.edgewall.org/log/.
+# history and logs, available at https://github.com/python-babel/babel/commits/master/.
 
 import unittest
 from datetime import datetime
@@ -974,6 +974,7 @@ class RoundtripPoTestCase(unittest.TestCase):
         catalog2 = pofile.read_po(buf)
         assert True is catalog.is_identical(catalog2)
 
+
 class PofileFunctionsTestCase(unittest.TestCase):
 
     def test_unescape(self):
@@ -1067,9 +1068,16 @@ def test_iterable_of_strings():
     """
     Test we can parse from an iterable of strings.
     """
-    catalog = pofile.read_po(['msgid "foo"', b'msgstr "Voh"'], locale="en_US")
+    catalog = pofile.read_po(['msgid "foo"', 'msgstr "Voh"'], locale="en_US")
     assert catalog.locale == Locale("en", "US")
     assert catalog.get("foo").string == "Voh"
+
+
+@pytest.mark.parametrize("order", [1, -1])
+def test_iterable_of_mismatching_strings(order):
+    # Mixing and matching byteses and strs in the same read_po call is not allowed.
+    with pytest.raises(Exception):  # noqa: B017 (will raise either TypeError or AttributeError)
+        pofile.read_po(['msgid "foo"', b'msgstr "Voh"'][::order])
 
 
 def test_issue_1087():
@@ -1088,9 +1096,8 @@ def test_issue_1134(case: str, abort_invalid: bool):
 
     if abort_invalid:
         # Catalog not created, aborted with PoFileError
-        with pytest.raises(pofile.PoFileError) as excinfo:
+        with pytest.raises(pofile.PoFileError, match="missing msgstr for msgid 'foo' on 0"):
             pofile.read_po(buf, abort_invalid=True)
-        assert str(excinfo.value) == "missing msgstr for msgid 'foo' on 0"
     else:
         # Catalog is created with warning, no abort
         output = pofile.read_po(buf)

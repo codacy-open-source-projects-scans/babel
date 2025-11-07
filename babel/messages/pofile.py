@@ -5,7 +5,7 @@
     Reading and writing of files in the ``gettext`` PO (portable object)
     format.
 
-    :copyright: (c) 2013-2024 by the Babel Team.
+    :copyright: (c) 2013-2025 by the Babel Team.
     :license: BSD, see LICENSE for more details.
 """
 from __future__ import annotations
@@ -13,17 +13,19 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from babel.core import Locale
 from babel.messages.catalog import Catalog, Message
-from babel.util import TextWrapper, _cmp
+from babel.util import TextWrapper
 
 if TYPE_CHECKING:
     from typing import IO, AnyStr
 
     from _typeshed import SupportsWrite
-    from typing_extensions import Literal
+
+
+_unescape_re = re.compile(r'\\([\\trn"])')
 
 
 def unescape(string: str) -> str:
@@ -46,7 +48,10 @@ def unescape(string: str) -> str:
             return '\r'
         # m is \ or "
         return m
-    return re.compile(r'\\([\\trn"])').sub(replace_escapes, string[1:-1])
+
+    if "\\" not in string:  # Fast path: there's nothing to unescape
+        return string[1:-1]
+    return _unescape_re.sub(replace_escapes, string[1:-1])
 
 
 def denormalize(string: str) -> str:
@@ -74,8 +79,7 @@ def denormalize(string: str) -> str:
         escaped_lines = string.splitlines()
         if string.startswith('""'):
             escaped_lines = escaped_lines[1:]
-        lines = map(unescape, escaped_lines)
-        return ''.join(lines)
+        return ''.join(map(unescape, escaped_lines))
     else:
         return unescape(string)
 
@@ -134,48 +138,14 @@ class PoFileError(Exception):
         self.lineno = lineno
 
 
-class _NormalizedString:
-
+class _NormalizedString(list):
     def __init__(self, *args: str) -> None:
-        self._strs: list[str] = []
-        for arg in args:
-            self.append(arg)
-
-    def append(self, s: str) -> None:
-        self._strs.append(s.strip())
+        super().__init__(map(str.strip, args))
 
     def denormalize(self) -> str:
-        return ''.join(map(unescape, self._strs))
-
-    def __bool__(self) -> bool:
-        return bool(self._strs)
-
-    def __repr__(self) -> str:
-        return os.linesep.join(self._strs)
-
-    def __cmp__(self, other: object) -> int:
-        if not other:
-            return 1
-
-        return _cmp(str(self), str(other))
-
-    def __gt__(self, other: object) -> bool:
-        return self.__cmp__(other) > 0
-
-    def __lt__(self, other: object) -> bool:
-        return self.__cmp__(other) < 0
-
-    def __ge__(self, other: object) -> bool:
-        return self.__cmp__(other) >= 0
-
-    def __le__(self, other: object) -> bool:
-        return self.__cmp__(other) <= 0
-
-    def __eq__(self, other: object) -> bool:
-        return self.__cmp__(other) == 0
-
-    def __ne__(self, other: object) -> bool:
-        return self.__cmp__(other) != 0
+        if not self:
+            return ""
+        return ''.join(map(unescape, self))
 
 
 class PoFileParser:
@@ -184,13 +154,6 @@ class PoFileParser:
 
     See `read_po` for simple cases.
     """
-
-    _keywords = [
-        'msgid',
-        'msgstr',
-        'msgctxt',
-        'msgid_plural',
-    ]
 
     def __init__(self, catalog: Catalog, ignore_obsolete: bool = False, abort_invalid: bool = False) -> None:
         self.catalog = catalog
@@ -218,23 +181,20 @@ class PoFileParser:
         Add a message to the catalog based on the current parser state and
         clear the state ready to process the next message.
         """
-        self.translations.sort()
         if len(self.messages) > 1:
             msgid = tuple(m.denormalize() for m in self.messages)
-        else:
-            msgid = self.messages[0].denormalize()
-        if isinstance(msgid, (list, tuple)):
             string = ['' for _ in range(self.catalog.num_plurals)]
-            for idx, translation in self.translations:
+            for idx, translation in sorted(self.translations):
                 if idx >= self.catalog.num_plurals:
                     self._invalid_pofile("", self.offset, "msg has more translations than num_plurals of catalog")
                     continue
                 string[idx] = translation.denormalize()
             string = tuple(string)
         else:
+            msgid = self.messages[0].denormalize()
             string = self.translations[0][1].denormalize()
         msgctxt = self.context.denormalize() if self.context else None
-        message = Message(msgid, string, list(self.locations), set(self.flags),
+        message = Message(msgid, string, self.locations, self.flags,
                           self.auto_comments, self.user_comments, lineno=self.offset + 1,
                           context=msgctxt)
         if self.obsolete:
@@ -249,27 +209,19 @@ class PoFileParser:
         if self.messages:
             if not self.translations:
                 self._invalid_pofile("", self.offset, f"missing msgstr for msgid '{self.messages[0].denormalize()}'")
-                self.translations.append([0, _NormalizedString("")])
+                self.translations.append([0, _NormalizedString()])
             self._add_message()
 
     def _process_message_line(self, lineno, line, obsolete=False) -> None:
-        if line.startswith('"'):
+        if not line:
+            return
+        if line[0] == '"':
             self._process_string_continuation_line(line, lineno)
         else:
             self._process_keyword_line(lineno, line, obsolete)
 
     def _process_keyword_line(self, lineno, line, obsolete=False) -> None:
-
-        for keyword in self._keywords:
-            try:
-                if line.startswith(keyword) and line[len(keyword)] in [' ', '[']:
-                    arg = line[len(keyword):]
-                    break
-            except IndexError:
-                self._invalid_pofile(line, lineno, "Keyword must be followed by a string")
-        else:
-            self._invalid_pofile(line, lineno, "Start of line didn't match any expected keyword.")
-            return
+        keyword, _, arg = line.partition(' ')
 
         if keyword in ['msgid', 'msgctxt']:
             self._finish_current_message()
@@ -285,19 +237,23 @@ class PoFileParser:
             self.in_msgctxt = False
             self.in_msgid = True
             self.messages.append(_NormalizedString(arg))
+            return
 
-        elif keyword == 'msgstr':
-            self.in_msgid = False
-            self.in_msgstr = True
-            if arg.startswith('['):
-                idx, msg = arg[1:].split(']', 1)
-                self.translations.append([int(idx), _NormalizedString(msg)])
-            else:
-                self.translations.append([0, _NormalizedString(arg)])
-
-        elif keyword == 'msgctxt':
+        if keyword == 'msgctxt':
             self.in_msgctxt = True
             self.context = _NormalizedString(arg)
+            return
+
+        if keyword == 'msgstr' or keyword.startswith('msgstr['):
+            self.in_msgid = False
+            self.in_msgstr = True
+            kwarg, has_bracket, idxarg = keyword.partition('[')
+            idx = int(idxarg[:-1]) if has_bracket else 0
+            s = _NormalizedString(arg) if arg != '""' else _NormalizedString()
+            self.translations.append([idx, s])
+            return
+
+        self._invalid_pofile(line, lineno, "Unknown or misformatted keyword")
 
     def _process_string_continuation_line(self, line, lineno) -> None:
         if self.in_msgid:
@@ -309,49 +265,62 @@ class PoFileParser:
         else:
             self._invalid_pofile(line, lineno, "Got line starting with \" but not in msgid, msgstr or msgctxt")
             return
-        s.append(line)
+        s.append(line.strip())  # For performance reasons, `NormalizedString` doesn't strip internally
 
     def _process_comment(self, line) -> None:
 
         self._finish_current_message()
 
-        if line[1:].startswith(':'):
+        prefix = line[:2]
+        if prefix == '#:':
             for location in _extract_locations(line[2:]):
-                pos = location.rfind(':')
-                if pos >= 0:
+                a, colon, b = location.rpartition(':')
+                if colon:
                     try:
-                        lineno = int(location[pos + 1:])
+                        self.locations.append((a, int(b)))
                     except ValueError:
                         continue
-                    self.locations.append((location[:pos], lineno))
-                else:
+                else:  # No line number specified
                     self.locations.append((location, None))
-        elif line[1:].startswith(','):
-            for flag in line[2:].lstrip().split(','):
-                self.flags.append(flag.strip())
-        elif line[1:].startswith('.'):
+            return
+
+        if prefix == '#,':
+            self.flags.extend(flag.strip() for flag in line[2:].lstrip().split(','))
+            return
+
+        if prefix == '#.':
             # These are called auto-comments
             comment = line[2:].strip()
             if comment:  # Just check that we're not adding empty comments
                 self.auto_comments.append(comment)
-        else:
-            # These are called user comments
-            self.user_comments.append(line[1:].strip())
+            return
+
+        # These are called user comments
+        self.user_comments.append(line[1:].strip())
 
     def parse(self, fileobj: IO[AnyStr] | Iterable[AnyStr]) -> None:
         """
-        Reads from the file-like object `fileobj` and adds any po file
-        units found in it to the `Catalog` supplied to the constructor.
+        Reads from the file-like object (or iterable of string-likes) `fileobj`
+        and adds any po file units found in it to the `Catalog`
+        supplied to the constructor.
+
+        All of the items in the iterable must be the same type; either `str`
+        or `bytes` (decoded with the catalog charset), but not a mixture.
         """
+        needs_decode = None
 
         for lineno, line in enumerate(fileobj):
             line = line.strip()
-            if not isinstance(line, str):
-                line = line.decode(self.catalog.charset)
+            if needs_decode is None:
+                # If we don't yet know whether we need to decode,
+                # let's find out now.
+                needs_decode = not isinstance(line, str)
             if not line:
                 continue
-            if line.startswith('#'):
-                if line[1:].startswith('~'):
+            if needs_decode:
+                line = line.decode(self.catalog.charset)
+            if line[0] == '#':
+                if line[:2] == '#~':
                     self._process_message_line(lineno, line[2:].lstrip(), obsolete=True)
                 else:
                     try:
@@ -366,8 +335,8 @@ class PoFileParser:
         # No actual messages found, but there was some info in comments, from which
         # we'll construct an empty header message
         if not self.counter and (self.flags or self.user_comments or self.auto_comments):
-            self.messages.append(_NormalizedString('""'))
-            self.translations.append([0, _NormalizedString('""')])
+            self.messages.append(_NormalizedString())
+            self.translations.append([0, _NormalizedString()])
             self._add_message()
 
     def _invalid_pofile(self, line, lineno, msg) -> None:
@@ -380,7 +349,7 @@ class PoFileParser:
 
 def read_po(
     fileobj: IO[AnyStr] | Iterable[AnyStr],
-    locale: str | Locale | None = None,
+    locale: Locale | str | None = None,
     domain: str | None = None,
     ignore_obsolete: bool = False,
     charset: str | None = None,
@@ -413,12 +382,12 @@ def read_po(
     ...         print((message.id, message.string))
     ...         print(' ', (message.locations, sorted(list(message.flags))))
     ...         print(' ', (message.user_comments, message.auto_comments))
-    (u'foo %(name)s', u'quux %(name)s')
-      ([(u'main.py', 1)], [u'fuzzy', u'python-format'])
+    ('foo %(name)s', 'quux %(name)s')
+      ([('main.py', 1)], ['fuzzy', 'python-format'])
       ([], [])
-    ((u'bar', u'baz'), (u'bar', u'baaz'))
-      ([(u'main.py', 3)], [])
-      ([u'A user comment'], [u'An auto comment'])
+    (('bar', 'baz'), ('bar', 'baaz'))
+      ([('main.py', 3)], [])
+      (['A user comment'], ['An auto comment'])
 
     .. versionadded:: 1.0
        Added support for explicit charset argument.
@@ -557,10 +526,10 @@ def write_po(
     message catalog to the provided file-like object.
 
     >>> catalog = Catalog()
-    >>> catalog.add(u'foo %(name)s', locations=[('main.py', 1)],
+    >>> catalog.add('foo %(name)s', locations=[('main.py', 1)],
     ...             flags=('fuzzy',))
     <Message...>
-    >>> catalog.add((u'bar', u'baz'), locations=[('main.py', 3)])
+    >>> catalog.add(('bar', 'baz'), locations=[('main.py', 3)])
     <Message...>
     >>> from io import BytesIO
     >>> buf = BytesIO()

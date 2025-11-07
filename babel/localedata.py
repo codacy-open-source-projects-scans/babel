@@ -7,7 +7,7 @@
     :note: The `Locale` class, which uses this module under the hood, provides a
            more convenient interface for accessing the locale data.
 
-    :copyright: (c) 2013-2024 by the Babel Team.
+    :copyright: (c) 2013-2025 by the Babel Team.
     :license: BSD, see LICENSE for more details.
 """
 
@@ -125,7 +125,7 @@ def load(name: os.PathLike[str] | str, merge_inherited: bool = True) -> dict[str
 
     >>> d = load('en_US')
     >>> d['languages']['sv']
-    u'Swedish'
+    'Swedish'
 
     Note that the results are cached, and subsequent requests for the same
     locale return the same dictionary:

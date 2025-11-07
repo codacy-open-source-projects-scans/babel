@@ -4,7 +4,7 @@
 
     Data structures for message catalogs.
 
-    :copyright: (c) 2013-2024 by the Babel Team.
+    :copyright: (c) 2013-2025 by the Babel Team.
     :license: BSD, see LICENSE for more details.
 """
 from __future__ import annotations
@@ -16,20 +16,28 @@ from copy import copy
 from difflib import SequenceMatcher
 from email import message_from_string
 from heapq import nlargest
+from string import Formatter
 from typing import TYPE_CHECKING
 
 from babel import __version__ as VERSION
 from babel.core import Locale, UnknownLocaleError
 from babel.dates import format_datetime
 from babel.messages.plurals import get_plural
-from babel.util import LOCALTZ, FixedOffsetTimezone, _cmp, distinct
+from babel.util import LOCALTZ, _cmp
 
 if TYPE_CHECKING:
     from typing_extensions import TypeAlias
 
     _MessageID: TypeAlias = str | tuple[str, ...] | list[str]
 
-__all__ = ['Message', 'Catalog', 'TranslationError']
+__all__ = [
+    'DEFAULT_HEADER',
+    'PYTHON_FORMAT',
+    'Catalog',
+    'Message',
+    'TranslationError',
+]
+
 
 def get_close_matches(word, possibilities, n=3, cutoff=0.6):
     """A modified version of ``difflib.get_close_matches``.
@@ -42,7 +50,7 @@ def get_close_matches(word, possibilities, n=3, cutoff=0.6):
     if not 0.0 <= cutoff <= 1.0:  # pragma: no cover
         raise ValueError(f"cutoff must be in [0.0, 1.0]: {cutoff!r}")
     result = []
-    s = SequenceMatcher(autojunk=False) # only line changed from difflib.py
+    s = SequenceMatcher(autojunk=False)  # only line changed from difflib.py
     s.set_seq2(word)
     for x in possibilities:
         s.set_seq1(x)
@@ -69,6 +77,25 @@ PYTHON_FORMAT = re.compile(r'''
 ''', re.VERBOSE)
 
 
+def _has_python_brace_format(string: str) -> bool:
+    if "{" not in string:
+        return False
+    fmt = Formatter()
+    try:
+        # `fmt.parse` returns 3-or-4-tuples of the form
+        # `(literal_text, field_name, format_spec, conversion)`;
+        # if `field_name` is set, this smells like brace format
+        field_name_seen = False
+        for t in fmt.parse(string):
+            if t[1] is not None:
+                field_name_seen = True
+                # We cannot break here, as we need to consume the whole string
+                # to ensure that it is a valid format string.
+    except ValueError:
+        return False
+    return field_name_seen
+
+
 def _parse_datetime_header(value: str) -> datetime.datetime:
     match = re.match(r'^(?P<datetime>.*?)(?P<tzoffset>[+-]\d{4})?$', value)
 
@@ -91,7 +118,10 @@ def _parse_datetime_header(value: str) -> datetime.datetime:
         net_mins_offset *= plus_minus
 
         # Create an offset object
-        tzoffset = FixedOffsetTimezone(net_mins_offset)
+        tzoffset = datetime.timezone(
+            offset=datetime.timedelta(minutes=net_mins_offset),
+            name=f'Etc/GMT{net_mins_offset:+d}',
+        )
 
         # Store the offset in a datetime object
         dt = dt.replace(tzinfo=tzoffset)
@@ -134,18 +164,25 @@ class Message:
         if not string and self.pluralizable:
             string = ('', '')
         self.string = string
-        self.locations = list(distinct(locations))
+        self.locations = list(dict.fromkeys(locations)) if locations else []
         self.flags = set(flags)
         if id and self.python_format:
             self.flags.add('python-format')
         else:
             self.flags.discard('python-format')
-        self.auto_comments = list(distinct(auto_comments))
-        self.user_comments = list(distinct(user_comments))
-        if isinstance(previous_id, str):
-            self.previous_id = [previous_id]
+        if id and self.python_brace_format:
+            self.flags.add('python-brace-format')
         else:
-            self.previous_id = list(previous_id)
+            self.flags.discard('python-brace-format')
+        self.auto_comments = list(dict.fromkeys(auto_comments)) if auto_comments else []
+        self.user_comments = list(dict.fromkeys(user_comments)) if user_comments else []
+        if previous_id:
+            if isinstance(previous_id, str):
+                self.previous_id = [previous_id]
+            else:
+                self.previous_id = list(previous_id)
+        else:
+            self.previous_id = []
         self.lineno = lineno
         self.context = context
 
@@ -186,10 +223,17 @@ class Message:
         return self.__dict__ == other.__dict__
 
     def clone(self) -> Message:
-        return Message(*map(copy, (self.id, self.string, self.locations,
-                                   self.flags, self.auto_comments,
-                                   self.user_comments, self.previous_id,
-                                   self.lineno, self.context)))
+        return Message(
+            id=copy(self.id),
+            string=copy(self.string),
+            locations=copy(self.locations),
+            flags=copy(self.flags),
+            auto_comments=copy(self.auto_comments),
+            user_comments=copy(self.user_comments),
+            previous_id=copy(self.previous_id),
+            lineno=self.lineno,  # immutable (str/None)
+            context=self.context,  # immutable (str/None)
+        )
 
     def check(self, catalog: Catalog | None = None) -> list[TranslationError]:
         """Run various validation checks on the message.  Some validations
@@ -248,9 +292,30 @@ class Message:
 
         :type:  `bool`"""
         ids = self.id
-        if not isinstance(ids, (list, tuple)):
-            ids = [ids]
-        return any(PYTHON_FORMAT.search(id) for id in ids)
+        if isinstance(ids, (list, tuple)):
+            for id in ids:  # Explicit loop for performance reasons.
+                if PYTHON_FORMAT.search(id):
+                    return True
+            return False
+        return bool(PYTHON_FORMAT.search(ids))
+
+    @property
+    def python_brace_format(self) -> bool:
+        """Whether the message contains Python f-string parameters.
+
+        >>> Message('Hello, {name}!').python_brace_format
+        True
+        >>> Message(('One apple', '{count} apples')).python_brace_format
+        True
+
+        :type:  `bool`"""
+        ids = self.id
+        if isinstance(ids, (list, tuple)):
+            for id in ids:  # Explicit loop for performance reasons.
+                if _has_python_brace_format(id):
+                    return True
+            return False
+        return _has_python_brace_format(ids)
 
 
 class TranslationError(Exception):
@@ -274,12 +339,20 @@ def parse_separated_header(value: str) -> dict[str, str]:
     return dict(m.get_params())
 
 
+def _force_text(s: str | bytes, encoding: str = 'utf-8', errors: str = 'strict') -> str:
+    if isinstance(s, str):
+        return s
+    if isinstance(s, bytes):
+        return s.decode(encoding, errors)
+    return str(s)
+
+
 class Catalog:
     """Representation of a message catalog."""
 
     def __init__(
         self,
-        locale: str | Locale | None = None,
+        locale: Locale | str | None = None,
         domain: str | None = None,
         header_comment: str | None = DEFAULT_HEADER,
         project: str | None = None,
@@ -428,46 +501,39 @@ class Catalog:
     """)
 
     def _get_mime_headers(self) -> list[tuple[str, str]]:
-        headers: list[tuple[str, str]] = []
-        headers.append(("Project-Id-Version", f"{self.project} {self.version}"))
-        headers.append(('Report-Msgid-Bugs-To', self.msgid_bugs_address))
-        headers.append(('POT-Creation-Date',
-                        format_datetime(self.creation_date, 'yyyy-MM-dd HH:mmZ',
-                                        locale='en')))
         if isinstance(self.revision_date, (datetime.datetime, datetime.time, int, float)):
-            headers.append(('PO-Revision-Date',
-                            format_datetime(self.revision_date,
-                                            'yyyy-MM-dd HH:mmZ', locale='en')))
+            revision_date = format_datetime(self.revision_date, 'yyyy-MM-dd HH:mmZ', locale='en')
         else:
-            headers.append(('PO-Revision-Date', self.revision_date))
-        headers.append(('Last-Translator', self.last_translator))
+            revision_date = self.revision_date
+
+        language_team = self.language_team
+        if self.locale_identifier and 'LANGUAGE' in language_team:
+            language_team = language_team.replace('LANGUAGE', str(self.locale_identifier))
+
+        headers: list[tuple[str, str]] = [
+            ("Project-Id-Version", f"{self.project} {self.version}"),
+            ('Report-Msgid-Bugs-To', self.msgid_bugs_address),
+            ('POT-Creation-Date', format_datetime(self.creation_date, 'yyyy-MM-dd HH:mmZ', locale='en')),
+            ('PO-Revision-Date', revision_date),
+            ('Last-Translator', self.last_translator),
+        ]
         if self.locale_identifier:
             headers.append(('Language', str(self.locale_identifier)))
-        if self.locale_identifier and ('LANGUAGE' in self.language_team):
-            headers.append(('Language-Team',
-                            self.language_team.replace('LANGUAGE',
-                                                       str(self.locale_identifier))))
-        else:
-            headers.append(('Language-Team', self.language_team))
+        headers.append(('Language-Team', language_team))
         if self.locale is not None:
             headers.append(('Plural-Forms', self.plural_forms))
-        headers.append(('MIME-Version', '1.0'))
-        headers.append(("Content-Type", f"text/plain; charset={self.charset}"))
-        headers.append(('Content-Transfer-Encoding', '8bit'))
-        headers.append(("Generated-By", f"Babel {VERSION}\n"))
+        headers += [
+            ('MIME-Version', '1.0'),
+            ("Content-Type", f"text/plain; charset={self.charset}"),
+            ('Content-Transfer-Encoding', '8bit'),
+            ("Generated-By", f"Babel {VERSION}\n"),
+        ]
         return headers
-
-    def _force_text(self, s: str | bytes, encoding: str = 'utf-8', errors: str = 'strict') -> str:
-        if isinstance(s, str):
-            return s
-        if isinstance(s, bytes):
-            return s.decode(encoding, errors)
-        return str(s)
 
     def _set_mime_headers(self, headers: Iterable[tuple[str, str]]) -> None:
         for name, value in headers:
-            name = self._force_text(name.lower(), encoding=self.charset)
-            value = self._force_text(value, encoding=self.charset)
+            name = _force_text(name.lower(), encoding=self.charset)
+            value = _force_text(value, encoding=self.charset)
             if name == 'project-id-version':
                 parts = value.split(' ')
                 self.project = ' '.join(parts[:-1])
@@ -646,19 +712,19 @@ class Catalog:
         """Add or update the message with the specified ID.
 
         >>> catalog = Catalog()
-        >>> catalog[u'foo'] = Message(u'foo')
-        >>> catalog[u'foo']
-        <Message u'foo' (flags: [])>
+        >>> catalog['foo'] = Message('foo')
+        >>> catalog['foo']
+        <Message 'foo' (flags: [])>
 
         If a message with that ID is already in the catalog, it is updated
         to include the locations and flags of the new message.
 
         >>> catalog = Catalog()
-        >>> catalog[u'foo'] = Message(u'foo', locations=[('main.py', 1)])
-        >>> catalog[u'foo'].locations
+        >>> catalog['foo'] = Message('foo', locations=[('main.py', 1)])
+        >>> catalog['foo'].locations
         [('main.py', 1)]
-        >>> catalog[u'foo'] = Message(u'foo', locations=[('utils.py', 5)])
-        >>> catalog[u'foo'].locations
+        >>> catalog['foo'] = Message('foo', locations=[('utils.py', 5)])
+        >>> catalog['foo'].locations
         [('main.py', 1), ('utils.py', 5)]
 
         :param id: the message ID
@@ -672,14 +738,10 @@ class Catalog:
                 # The new message adds pluralization
                 current.id = message.id
                 current.string = message.string
-            current.locations = list(distinct(current.locations +
-                                              message.locations))
-            current.auto_comments = list(distinct(current.auto_comments +
-                                                  message.auto_comments))
-            current.user_comments = list(distinct(current.user_comments +
-                                                  message.user_comments))
+            current.locations = list(dict.fromkeys([*current.locations, *message.locations]))
+            current.auto_comments = list(dict.fromkeys([*current.auto_comments, *message.auto_comments]))
+            current.user_comments = list(dict.fromkeys([*current.user_comments, *message.user_comments]))
             current.flags |= message.flags
-            message = current
         elif id == '':
             # special treatment for the header message
             self.mime_headers = message_from_string(message.string).items()
@@ -706,10 +768,10 @@ class Catalog:
         """Add or update the message with the specified ID.
 
         >>> catalog = Catalog()
-        >>> catalog.add(u'foo')
+        >>> catalog.add('foo')
         <Message ...>
-        >>> catalog[u'foo']
-        <Message u'foo' (flags: [])>
+        >>> catalog['foo']
+        <Message 'foo' (flags: [])>
 
         This method simply constructs a `Message` object with the given
         arguments and invokes `__setitem__` with that object.
@@ -785,11 +847,11 @@ class Catalog:
         >>> template.add(('salad', 'salads'), locations=[('util.py', 42)])
         <Message ...>
         >>> catalog = Catalog(locale='de_DE')
-        >>> catalog.add('blue', u'blau', locations=[('main.py', 98)])
+        >>> catalog.add('blue', 'blau', locations=[('main.py', 98)])
         <Message ...>
-        >>> catalog.add('head', u'Kopf', locations=[('util.py', 33)])
+        >>> catalog.add('head', 'Kopf', locations=[('util.py', 33)])
         <Message ...>
-        >>> catalog.add(('salad', 'salads'), (u'Salat', u'Salate'),
+        >>> catalog.add(('salad', 'salads'), ('Salat', 'Salate'),
         ...             locations=[('util.py', 38)])
         <Message ...>
 
@@ -804,13 +866,13 @@ class Catalog:
 
         >>> msg2 = catalog['blue']
         >>> msg2.string
-        u'blau'
+        'blau'
         >>> msg2.locations
         [('main.py', 100)]
 
         >>> msg3 = catalog['salad']
         >>> msg3.string
-        (u'Salat', u'Salate')
+        ('Salat', 'Salate')
         >>> msg3.locations
         [('util.py', 42)]
 
@@ -825,6 +887,9 @@ class Catalog:
 
         :param template: the reference catalog, usually read from a POT file
         :param no_fuzzy_matching: whether to use fuzzy matching of message IDs
+        :param update_header_comment: whether to copy the header comment from the template
+        :param keep_user_comments: whether to keep user comments from the old catalog
+        :param update_creation_date: whether to copy the creation date from the template
         """
         messages = self._messages
         remaining = messages.copy()
@@ -857,8 +922,8 @@ class Catalog:
                 assert oldmsg is not None
             message.string = oldmsg.string
 
-            if keep_user_comments:
-                message.user_comments = list(distinct(oldmsg.user_comments))
+            if keep_user_comments and oldmsg.user_comments:
+                message.user_comments = list(dict.fromkeys(oldmsg.user_comments))
 
             if isinstance(message.id, (list, tuple)):
                 if not isinstance(message.string, (list, tuple)):

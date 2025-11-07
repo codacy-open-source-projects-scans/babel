@@ -4,7 +4,7 @@
 
     Various utility classes and functions.
 
-    :copyright: (c) 2013-2024 by the Babel Team.
+    :copyright: (c) 2013-2025 by the Babel Team.
     :license: BSD, see LICENSE for more details.
 """
 from __future__ import annotations
@@ -255,10 +255,20 @@ odict = dict
 
 
 class FixedOffsetTimezone(datetime.tzinfo):
-    """Fixed offset in minutes east from UTC."""
+    """
+    Fixed offset in minutes east from UTC.
+
+    DEPRECATED: Use the standard library `datetime.timezone` instead.
+    """
+    # TODO (Babel 3.x): Remove this class
 
     def __init__(self, offset: float, name: str | None = None) -> None:
-
+        warnings.warn(
+            "`FixedOffsetTimezone` is deprecated and will be removed in a future version of Babel. "
+            "Use the standard library `datetime.timezone` class.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._offset = datetime.timedelta(minutes=offset)
         if name is None:
             name = 'Etc/GMT%+d' % offset
