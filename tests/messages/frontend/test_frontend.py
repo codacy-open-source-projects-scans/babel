@@ -134,8 +134,7 @@ def test_parse_mapping(data: str, parser, preprocess, is_toml):
 
 
 def test_parse_keywords():
-    kw = frontend.parse_keywords(['_', 'dgettext:2',
-                                  'dngettext:2,3', 'pgettext:1c,2'])
+    kw = frontend.parse_keywords(['_', 'dgettext:2', 'dngettext:2,3', 'pgettext:1c,2'])
     assert kw == {
         '_': None,
         'dgettext': (2,),
@@ -219,6 +218,7 @@ def test_extract_keyword_args_384(split, arg_name):
     )
     assert isinstance(cmdinst, ExtractMessages)
     assert set(cmdinst.keywords.keys()) == {'_', 'dgettext', 'dngettext',
+                                            'dnpgettext', 'dpgettext',
                                             'gettext', 'gettext_lazy',
                                             'gettext_noop', 'N_', 'ngettext',
                                             'ngettext_lazy', 'npgettext',
@@ -237,7 +237,6 @@ def test_update_catalog_boolean_args():
     assert cmdinst.no_fuzzy_matching is True
     assert cmdinst.ignore_obsolete is True
     assert cmdinst.previous is False  # Mutually exclusive with no_fuzzy_matching
-
 
 
 def test_compile_catalog_dir(tmp_path):
@@ -280,7 +279,6 @@ def test_compile_catalog_explicit(tmp_path):
     assert mo_file.exists()
 
 
-
 @pytest.mark.parametrize("explicit_locale", (None, 'fi_FI'), ids=("implicit", "explicit"))
 def test_update_dir(tmp_path, explicit_locale: bool):
     """
@@ -290,7 +288,7 @@ def test_update_dir(tmp_path, explicit_locale: bool):
     template.add("1")
     template.add("2")
     template.add("3")
-    tmpl_file = (tmp_path / 'temp-template.pot')
+    tmpl_file = tmp_path / 'temp-template.pot'
     with tmpl_file.open("wb") as outfp:
         write_po(outfp, template)
     locales = ("fi_FI", "sv_SE")
