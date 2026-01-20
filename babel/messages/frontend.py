@@ -23,7 +23,7 @@ import tempfile
 import warnings
 from configparser import RawConfigParser
 from io import StringIO
-from typing import BinaryIO, Iterable, Literal
+from typing import Any, BinaryIO, Iterable, Literal
 
 from babel import Locale, localedata
 from babel import __version__ as VERSION
@@ -584,7 +584,7 @@ class ExtractMessages(CommandMixin):
                     method_map, options_map = [], {}
                     for pattern, method, options in mapping:
                         method_map.append((pattern, method))
-                        options_map[pattern] = options or {}
+                        options_map[pattern] = _parse_string_options(options or {})
                 mappings.append((path, method_map, options_map))
 
         else:
@@ -592,6 +592,23 @@ class ExtractMessages(CommandMixin):
                 mappings.append((path, DEFAULT_MAPPING, {}))
 
         return mappings
+
+
+def _init_catalog(*, input_file, output_file, locale: Locale, width: int) -> None:
+    with open(input_file, 'rb') as infile:
+        # Although reading from the catalog template, read_po must be fed
+        # the locale in order to correctly calculate plurals
+        catalog = read_po(infile, locale=locale)
+
+    catalog.locale = locale
+    catalog.revision_date = datetime.datetime.now(LOCALTZ)
+    catalog.fuzzy = False
+
+    if dirname := os.path.dirname(output_file):
+        os.makedirs(dirname, exist_ok=True)
+
+    with open(output_file, 'wb') as outfile:
+        write_po(outfile, catalog, width=width)
 
 
 class InitCatalog(CommandMixin):
@@ -642,8 +659,6 @@ class InitCatalog(CommandMixin):
             lc_messages_path = pathlib.Path(self.output_dir) / self.locale / "LC_MESSAGES"
             self.output_file = str(lc_messages_path / f"{self.domain}.po")
 
-        if not os.path.exists(os.path.dirname(self.output_file)):
-            os.makedirs(os.path.dirname(self.output_file))
         if self.no_wrap and self.width:
             raise OptionError("'--no-wrap' and '--width' are mutually exclusive")
         if not self.no_wrap and not self.width:
@@ -657,18 +672,12 @@ class InitCatalog(CommandMixin):
             self.output_file,
             self.input_file,
         )
-
-        with open(self.input_file, 'rb') as infile:
-            # Although reading from the catalog template, read_po must be fed
-            # the locale in order to correctly calculate plurals
-            catalog = read_po(infile, locale=self.locale)
-
-        catalog.locale = self._locale
-        catalog.revision_date = datetime.datetime.now(LOCALTZ)
-        catalog.fuzzy = False
-
-        with open(self.output_file, 'wb') as outfile:
-            write_po(outfile, catalog, width=self.width)
+        _init_catalog(
+            input_file=self.input_file,
+            output_file=self.output_file,
+            locale=self._locale,
+            width=self.width,
+        )
 
 
 class UpdateCatalog(CommandMixin):
@@ -807,17 +816,12 @@ class UpdateCatalog(CommandMixin):
                     self.input_file,
                 )
 
-                with open(self.input_file, 'rb') as infile:
-                    # Although reading from the catalog template, read_po must
-                    # be fed the locale in order to correctly calculate plurals
-                    catalog = read_po(infile, locale=self.locale)
-
-                catalog.locale = self._locale
-                catalog.revision_date = datetime.datetime.now(LOCALTZ)
-                catalog.fuzzy = False
-
-                with open(filename, 'wb') as outfile:
-                    write_po(outfile, catalog)
+                _init_catalog(
+                    input_file=self.input_file,
+                    output_file=filename,
+                    locale=self._locale,
+                    width=self.width,
+                )
 
             self.log.info('updating catalog %s based on %s', filename, self.input_file)
             with open(filename, 'rb') as infile:
@@ -1075,7 +1079,7 @@ def parse_mapping_cfg(fileobj, filename=None):
         else:
             method, pattern = (part.strip() for part in section.split(':', 1))
             method_map.append((pattern, method))
-            options_map[pattern] = dict(parser.items(section))
+            options_map[pattern] = _parse_string_options(dict(parser.items(section)))
 
     if extractors:
         for idx, (pattern, method) in enumerate(method_map):
@@ -1084,6 +1088,25 @@ def parse_mapping_cfg(fileobj, filename=None):
             method_map[idx] = (pattern, method)
 
     return method_map, options_map
+
+
+def _parse_string_options(options: dict[str, str]) -> dict[str, Any]:
+    """
+    Parse string-formatted options from a mapping configuration.
+
+    The `keywords` and `add_comments` options are parsed into a canonical
+    internal format, so they can be merged with global keywords/comment tags
+    during extraction.
+    """
+    options: dict[str, Any] = options.copy()
+
+    if keywords_val := options.pop("keywords", None):
+        options['keywords'] = parse_keywords(listify_value(keywords_val))
+
+    if comments_val := options.pop("add_comments", None):
+        options['add_comments'] = listify_value(comments_val)
+
+    return options
 
 
 def _parse_config_object(config: dict, *, filename="(unknown)"):
@@ -1139,6 +1162,26 @@ def _parse_config_object(config: dict, *, filename="(unknown)"):
             )
         if not isinstance(pattern, list):
             pattern = [pattern]
+
+        if keywords_val := entry.pop("keywords", None):
+            if isinstance(keywords_val, str):
+                entry["keywords"] = parse_keywords(listify_value(keywords_val))
+            elif isinstance(keywords_val, list):
+                entry["keywords"] = parse_keywords(keywords_val)
+            else:
+                raise ConfigurationError(
+                    f"{filename}: mappings[{idx}]: 'keywords' must be a string or list, got {keywords_val!r}",
+                )
+
+        if comments_val := entry.pop("add_comments", None):
+            if isinstance(comments_val, str):
+                entry["add_comments"] = [comments_val]
+            elif isinstance(comments_val, list):
+                entry["add_comments"] = comments_val
+            else:
+                raise ConfigurationError(
+                    f"{filename}: mappings[{idx}]: 'add_comments' must be a string or list, got {comments_val!r}",
+                )
 
         for pat in pattern:
             if not isinstance(pat, str):
