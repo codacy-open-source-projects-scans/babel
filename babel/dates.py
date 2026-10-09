@@ -146,9 +146,7 @@ def _get_datetime(instant: _Instant) -> datetime.datetime:
     True
 
     :param instant: date, time, datetime, integer, float or None
-    :type instant: date|time|datetime|int|float|None
     :return: a datetime
-    :rtype: datetime
     """
     if instant is None:
         return datetime.datetime.now(UTC).replace(tzinfo=None)
@@ -461,18 +459,19 @@ def get_timezone_gmt(
 
     offset = datetime.tzinfo.utcoffset(datetime)
     seconds = offset.days * 24 * 60 * 60 + offset.seconds
-    hours, seconds = divmod(seconds, 3600)
-    if return_z and hours == 0 and seconds == 0:
+    if return_z and seconds == 0:
         return 'Z'
-    elif seconds == 0 and width == 'iso8601_short':
-        return '%+03d' % hours
+    sign = '-' if seconds < 0 else '+'
+    hours, seconds = divmod(abs(seconds), 3600)
+    if seconds == 0 and width == 'iso8601_short':
+        return '%s%02d' % (sign, hours)
     elif width == 'short' or width == 'iso8601_short':
-        pattern = '%+03d%02d'
+        pattern = '%s%02d%02d'
     elif width == 'iso8601':
-        pattern = '%+03d:%02d'
+        pattern = '%s%02d:%02d'
     else:
-        pattern = locale.zone_formats['gmt'] % '%+03d:%02d'
-    return pattern % (hours, seconds // 60)
+        pattern = locale.zone_formats['gmt'] % '%s%02d:%02d'
+    return pattern % (sign, hours, seconds // 60)
 
 
 def get_timezone_location(
@@ -994,20 +993,13 @@ def format_timedelta(
         if add_direction:
             # Try to find the length variant version first ("year-narrow")
             # before falling back to the default.
-            unit_rel_patterns = date_fields.get(f"{a_unit}-{format}") or date_fields[a_unit]
+            unit_rel_patterns = date_fields.get(f"{a_unit}-{format}") or date_fields.get(a_unit) or {}
             if seconds >= 0:
                 yield unit_rel_patterns['future']
             else:
                 yield unit_rel_patterns['past']
         a_unit = f"duration-{a_unit}"
-        unit_pats = unit_patterns.get(a_unit, {})
-        yield unit_pats.get(format)
-        # We do not support `<alias>` tags at all while ingesting CLDR data,
-        # so these aliases specified in `root.xml` are hard-coded here:
-        # <unitLength type="long"><alias source="locale" path="../unitLength[@type='short']"/></unitLength>
-        # <unitLength type="narrow"><alias source="locale" path="../unitLength[@type='short']"/></unitLength>
-        if format in ("long", "narrow"):
-            yield unit_pats.get("short")
+        yield unit_patterns.get(a_unit, {}).get(format)  # resolves aliases
 
     for unit, secs_per_unit in TIMEDELTA_UNITS:
         value = abs(seconds) / secs_per_unit
@@ -1834,8 +1826,6 @@ def tokenize_pattern(pattern: str) -> list[tuple[str, str | tuple[str, int]]]:
     For "field" tokens, the value is a tuple of (field character, repetition count).
 
     :param pattern: Pattern string
-    :type pattern: str
-    :rtype: list[tuple]
     """
     result = []
     quotebuf = None
@@ -1895,9 +1885,6 @@ def untokenize_pattern(tokens: Iterable[tuple[str, str | tuple[str, int]]]) -> s
     Turn a date format pattern token stream back into a string.
 
     This is the reverse operation of ``tokenize_pattern``.
-
-    :type tokens: Iterable[tuple]
-    :rtype: str
     """
     output = []
     for tok_type, tok_value in tokens:
@@ -1971,13 +1958,9 @@ def match_skeleton(
     'hmv'
 
     :param skeleton: The skeleton to match
-    :type skeleton: str
     :param options: An iterable of other skeletons to match against
-    :type options: Iterable[str]
     :param allow_different_fields: Whether to allow a match that uses different fields
                                    than the skeleton requested.
-    :type allow_different_fields: bool
-
     :return: The closest skeleton match, or if no match was found, None.
     :rtype: str|None
     """

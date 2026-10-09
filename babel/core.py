@@ -361,6 +361,11 @@ class Locale:
         if not isinstance(identifier, str):
             raise TypeError(f"Unexpected value for identifier: {identifier!r}")
 
+        # C/POSIX is not a CLDR language. Same mapping default_locale uses.
+        posix_stem = identifier.partition(".")[0]
+        if posix_stem.upper() in {"C", "POSIX"}:
+            identifier = "en_US_POSIX"
+
         parts = parse_locale(identifier, sep=sep)
         input_id = get_locale_identifier(parts)
 
@@ -471,7 +476,7 @@ class Locale:
     @property
     def _data(self) -> localedata.LocaleDataDict:
         if self.__data is None:
-            self.__data = localedata.LocaleDataDict(localedata.load(self.__data_identifier))
+            self.__data = localedata.get_locale_data(self.__data_identifier)
         return self.__data
 
     def get_display_name(self, locale: Locale | str | None = None) -> str | None:
@@ -509,9 +514,9 @@ class Locale:
                 retval += f" ({detail_string})"
         return retval
 
-    display_name = property(
-        get_display_name,
-        doc="""\
+    @property
+    def display_name(self) -> str | None:
+        """
         The localized display name of the locale.
 
         >>> Locale('en').display_name
@@ -520,10 +525,8 @@ class Locale:
         'English (United States)'
         >>> Locale('sv').display_name
         'svenska'
-
-        :type: `unicode`
-        """,
-    )
+        """
+        return self.get_display_name()
 
     def get_language_name(self, locale: Locale | str | None = None) -> str | None:
         """Return the language of this locale in the given locale.
@@ -540,15 +543,15 @@ class Locale:
         locale = Locale.parse(locale)
         return locale.languages.get(self.language)
 
-    language_name = property(
-        get_language_name,
-        doc="""\
+    @property
+    def language_name(self) -> str | None:
+        """
         The localized language name of the locale.
 
         >>> Locale('en', 'US').language_name
         'English'
-    """,
-    )
+        """
+        return self.get_language_name()
 
     def get_territory_name(self, locale: Locale | str | None = None) -> str | None:
         """Return the territory name in the given locale."""
@@ -557,15 +560,15 @@ class Locale:
         locale = Locale.parse(locale)
         return locale.territories.get(self.territory or '')
 
-    territory_name = property(
-        get_territory_name,
-        doc="""\
+    @property
+    def territory_name(self) -> str | None:
+        """
         The localized territory name of the locale if available.
 
         >>> Locale('de', 'DE').territory_name
         'Deutschland'
-    """,
-    )
+        """
+        return self.get_territory_name()
 
     def get_script_name(self, locale: Locale | str | None = None) -> str | None:
         """Return the script name in the given locale."""
@@ -574,15 +577,15 @@ class Locale:
         locale = Locale.parse(locale)
         return locale.scripts.get(self.script or '')
 
-    script_name = property(
-        get_script_name,
-        doc="""\
+    @property
+    def script_name(self) -> str | None:
+        """
         The localized script name of the locale if available.
 
         >>> Locale('sr', 'ME', script='Latn').script_name
         'latinica'
-    """,
-    )
+        """
+        return self.get_script_name()
 
     @property
     def english_name(self) -> str | None:
@@ -592,8 +595,7 @@ class Locale:
         'German'
         >>> Locale('de', 'DE').english_name
         'German (Germany)'
-
-        :type: `unicode`"""
+        """
         return self.get_display_name(Locale('en'))
 
     # { General Locale Display Names
@@ -1375,7 +1377,7 @@ def get_cldr_version() -> str:
     function is a string representing a version number, e.g. '47'.
 
     >>> get_cldr_version()
-    '47'
+    '48'
 
     .. versionadded:: 2.18
 
